@@ -1,0 +1,26 @@
+name: Diana lifecycle preflight
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [control/signal.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-lifecycle-preflight
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Deterministic policy tests (no credentials)
+        run: python3 -m unittest -v
+      - name: Verify installed lifecycle credential by stopping existing Codespace
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: python3 controller.py
