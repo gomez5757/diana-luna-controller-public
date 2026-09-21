@@ -24,19 +24,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise GuardError('API_REDIRECT_REJECTED')
 
-def validate_signal(data: object) -> dict:
+def validate_signal(data: object, *, wake_enabled=False) -> dict:
     if type(data) is not dict or set(data) != {'schema', 'action', 'nonce'}:
         raise GuardError('SIGNAL_FIELDS_INVALID')
     if type(data['schema']) is not int or data['schema'] != 1:
         raise GuardError('SCHEMA_INVALID')
     if type(data['nonce']) is not str or re.fullmatch(r'[a-f0-9]{32}',data['nonce']) is None:
         raise GuardError('NONCE_INVALID')
-    if data['action'] != 'stop':
+    if data['action'] != 'stop' and not (wake_enabled is True and data['action'] in ('wake','probe')):
         raise GuardError('WAKE_DISABLED_PENDING_PRIVATE_WORKER_VALIDATION')
     return data
 
 def api_post(action: str) -> dict:
-    if action != 'stop':
+    if action not in ('stop','start'):
         raise GuardError('ENDPOINT_NOT_ALLOWED')
     token = os.environ.get('DIANA_CODESPACE_LIFECYCLE_TOKEN','')
     if not token:
@@ -73,13 +73,29 @@ def stop_until_confirmed(*,api=api_post,sleep=time.sleep,attempts=8) -> dict:
         if n+1<attempts: sleep(5)
     raise GuardError('SHUTDOWN_NOT_CONFIRMED')
 
+def bounded_wake(seconds: int, *, api=api_post, sleep=time.sleep) -> dict:
+    if type(seconds) is not int or not 1 <= seconds <= 900:
+        raise GuardError('LEASE_DURATION_INVALID')
+    try:
+        api('start')
+        # Acceptance is not proof of private worker success.
+        sleep(seconds)
+    finally:
+        stopped=stop_until_confirmed(api=api,sleep=sleep)
+    return {**stopped,'wake_requested':True,'lease_seconds':seconds,
+            'worker_result':'READ_PRIVATE_RECEIPT_SEPARATELY'}
+
+
 def main() -> int:
     try:
+        if sys.argv[1:] == ['--stop']:
+            print(json.dumps(stop_until_confirmed(),sort_keys=True));return 0
         path=Path('control/signal.json')
         if path.is_symlink() or path.stat().st_size>2048:
             raise GuardError('SIGNAL_FILE_INVALID')
-        validate_signal(json.loads(path.read_text(encoding='utf-8')))
-        result=stop_until_confirmed()
+        installed=json.loads(Path('control/installation.json').read_text(encoding='utf-8'))
+        signal=validate_signal(json.loads(path.read_text(encoding='utf-8')),wake_enabled=installed.get('wake_enabled') is True)
+        result=stop_until_confirmed() if signal['action']=='stop' else bounded_wake(300 if signal['action']=='probe' else 900)
         print(json.dumps(result,sort_keys=True))
         return 0
     except (GuardError,OSError,ValueError) as exc:
