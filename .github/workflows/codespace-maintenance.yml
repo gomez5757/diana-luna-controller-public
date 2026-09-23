@@ -1,0 +1,86 @@
+name: Diana bounded Codespace maintenance
+on:
+  push:
+    branches: [main]
+    paths: [control/maintenance.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-codespace-maintenance
+  cancel-in-progress: false
+jobs:
+  maintenance:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: request
+        name: Validate exact maintenance request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re
+          from pathlib import Path
+          p=Path('control/maintenance.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size>4096:
+              raise SystemExit('invalid maintenance file')
+          d=json.loads(p.read_text())
+          if type(d) is not dict or set(d)!={'schema','action','nonce','expected_sha'}:
+              raise SystemExit('invalid maintenance fields')
+          if d['schema']!=1 or d['action'] not in {'probe','apply','verify','install'}:
+              raise SystemExit('invalid maintenance action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          if d['action']=='probe':
+              if d['expected_sha']!='0'*40: raise SystemExit('probe sha must be zero')
+          elif re.fullmatch(r'[a-f0-9]{40}',str(d['expected_sha'])) is None:
+              raise SystemExit('invalid expected sha')
+          print('action='+d['action'])
+          print('expected_sha='+d['expected_sha'])
+          PY
+      - name: Start exact existing Codespace
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -X POST /user/codespaces/diana-luna-secure-auth-pjxq7jrj7xpwfrpjx/start >/dev/null
+          for _ in $(seq 1 36); do
+            state=$(gh codespace view -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx --json state --jq .state)
+            if [ "$state" = "Available" ]; then exit 0; fi
+            sleep 5
+          done
+          echo "Codespace did not become Available" >&2
+          exit 1
+      - name: Run fixed remote maintenance operation
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+          ACTION: ${{ steps.request.outputs.action }}
+          EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ACTION" in
+            probe)
+              remote='set -euo pipefail; printf "CODESPACE_SSH_OK\\n"; test -d /workspaces/diana-plus/.git; git -C /workspaces/diana-plus status --porcelain=v1 --untracked-files=no >/dev/null'
+              ;;
+            apply)
+              remote="set -euo pipefail; cd /workspaces/diana-plus; git fetch origin chatgpt-auto/luna-unbounded-parallel-20260923; test \"\$(git rev-parse FETCH_HEAD)\" = '$EXPECTED_SHA'; rm -rf /workspaces/.diana-parallel-v2; git worktree add --detach /workspaces/.diana-parallel-v2 FETCH_HEAD; python3 /workspaces/.diana-parallel-v2/.devcontainer/parallel_v2_upgrade.py --apply-and-push --expected-sha '$EXPECTED_SHA'"
+              ;;
+            verify)
+              remote="set -euo pipefail; cd /workspaces/diana-plus; git fetch origin chatgpt-auto/luna-unbounded-parallel-20260923; test \"\$(git rev-parse FETCH_HEAD)\" = '$EXPECTED_SHA'; rm -rf /workspaces/.diana-parallel-v2-verify; git worktree add --detach /workspaces/.diana-parallel-v2-verify FETCH_HEAD; python3 /workspaces/.diana-parallel-v2-verify/.devcontainer/parallel_v2_upgrade.py --verify-only --expected-sha '$EXPECTED_SHA'"
+              ;;
+            install)
+              remote="set -euo pipefail; cd /workspaces/diana-plus; git fetch origin chatgpt-auto/luna-unbounded-parallel-20260923; test \"\$(git rev-parse FETCH_HEAD)\" = '$EXPECTED_SHA'; rm -rf /workspaces/.diana-parallel-v2-install; git worktree add --detach /workspaces/.diana-parallel-v2-install FETCH_HEAD; python3 /workspaces/.diana-parallel-v2-install/.devcontainer/parallel_v2_upgrade.py --verify-only --expected-sha '$EXPECTED_SHA'; sudo -n python3 /workspaces/.diana-parallel-v2-install/.devcontainer/install_parallel_v2.py --expected-sha '$EXPECTED_SHA'"
+              ;;
+          esac
+          gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx "$remote"
+      - name: Confirm shutdown even after failure
+        if: always()
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: python3 controller.py --stop
