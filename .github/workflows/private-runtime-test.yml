@@ -1,0 +1,98 @@
+name: Diana private exported runtime validation
+on:
+  push:
+    branches: [main]
+    paths: [control/private-test.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-private-runtime-test
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: request
+        name: Validate exact private test request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re
+          from pathlib import Path
+          p=Path('control/private-test.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size>1024:
+              raise SystemExit('invalid request')
+          d=json.loads(p.read_text())
+          if type(d) is not dict or set(d)!={'schema','action','nonce','sha'}:
+              raise SystemExit('invalid fields')
+          if d['schema']!=1 or d['action']!='validate-exported-runtime':
+              raise SystemExit('invalid action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          if re.fullmatch(r'[a-f0-9]{40}',str(d['sha'])) is None:
+              raise SystemExit('invalid sha')
+          print('sha='+d['sha'])
+          PY
+      - name: Fetch exact private export snapshot without persisting credentials
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+          SOURCE_SHA: ${{ steps.request.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_SHA" = "fa8cf4b034b5ebe2ef9876a6b5ad1aec9f7731c7"
+          gh api "/repos/gomez5757/diana-plus/commits/$SOURCE_SHA" --jq .sha | grep -Fx "$SOURCE_SHA" >/dev/null
+          gh api -H 'Accept: application/vnd.github+json' "/repos/gomez5757/diana-plus/tarball/$SOURCE_SHA" > /tmp/private-source.tgz
+          mkdir -p /tmp/private-source
+          tar -xzf /tmp/private-source.tgz --strip-components=1 -C /tmp/private-source
+          rm -f /tmp/private-source.tgz
+      - name: Run exported runtime tests with sanitized output
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          NO_COLOR: "1"
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd /tmp/private-source/infra/luna-codespace/runtime
+          export PYTHONPATH="$PWD"
+          set +e
+          python3 -B -m unittest -v \
+            test_runtime_manifest \
+            test_runtime_cycle \
+            test_runtime_worker \
+            test_runtime_executor \
+            test_runtime_parallel > /tmp/selected.log 2>&1
+          selected=$?
+          python3 -B -m unittest discover -s . -p 'test_*.py' > /tmp/full.log 2>&1
+          full=$?
+          cd /tmp/private-source
+          python3 -B -m unittest infra/luna-codespace/test_checkpoint.py > /tmp/checkpoint.log 2>&1
+          checkpoint=$?
+          set -e
+          python3 - <<'PY'
+          import hashlib,re
+          from pathlib import Path
+          for name in ('selected','full','checkpoint'):
+              p=Path('/tmp/'+name+'.log')
+              raw=p.read_text(errors='replace')
+              redacted=[]
+              for line in raw.splitlines():
+                  if line.startswith(('FAIL:','ERROR:','Traceback','AssertionError','RuntimeError','ImportError','ModuleNotFoundError')) or line.startswith(('Ran ','FAILED','OK')) or line.lstrip().startswith(('File "','self.assert','raise ')):
+                      line=re.sub(r'/tmp/private-source[^" ]*','<private-path>',line)
+                      redacted.append(line[:1200])
+              print(f'{name.upper()}_SHA256={hashlib.sha256(raw.encode()).hexdigest()}')
+              for line in redacted[-120:]: print(f'{name.upper()}:{line}')
+          PY
+          echo "SELECTED_EXIT=$selected"
+          echo "FULL_EXIT=$full"
+          echo "CHECKPOINT_EXIT=$checkpoint"
+          rm -rf /tmp/private-source /tmp/selected.log /tmp/full.log /tmp/checkpoint.log
+          test "$selected" -eq 0
+          test "$full" -eq 0
+          test "$checkpoint" -eq 0
