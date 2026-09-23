@@ -1,0 +1,43 @@
+name: Diana immediate Codespace stop
+on:
+  push:
+    branches: [main]
+    paths: [control/emergency-stop.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-immediate-stop
+  cancel-in-progress: false
+jobs:
+  stop:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Validate fixed stop request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          p=Path('control/emergency-stop.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size > 1024:
+              raise SystemExit('invalid stop request')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          if type(d) is not dict or set(d) != {'schema','action','nonce'}:
+              raise SystemExit('invalid stop fields')
+          if d['schema'] != 1 or d['action'] != 'stop':
+              raise SystemExit('invalid stop action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid stop nonce')
+          PY
+      - name: Deterministic controller tests
+        run: python3 -m unittest -v
+      - name: Stop fixed Codespace and confirm provider state
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: python3 controller.py --stop
