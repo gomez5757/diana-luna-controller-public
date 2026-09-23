@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from responsive_lifecycle import responsive_wake
 
 CODESPACE = 'diana-luna-secure-auth-pjxq7jrj7xpwfrpjx'
 API = 'https://api.github.com'
@@ -89,13 +90,13 @@ def bounded_wake(seconds: int, *, api=api_post, sleep=time.sleep) -> dict:
 def main() -> int:
     try:
         if sys.argv[1:] == ['--stop']:
-            print(json.dumps(stop_until_confirmed(),sort_keys=True));return 0
+            print(json.dumps(stop_until_confirmed(attempts=25),sort_keys=True));return 0
         path=Path('control/signal.json')
         if path.is_symlink() or path.stat().st_size>2048:
             raise GuardError('SIGNAL_FILE_INVALID')
         installed=json.loads(Path('control/installation.json').read_text(encoding='utf-8'))
         signal=validate_signal(json.loads(path.read_text(encoding='utf-8')),wake_enabled=installed.get('wake_enabled') is True)
-        result=stop_until_confirmed() if signal['action']=='stop' else bounded_wake(300 if signal['action']=='probe' else 900)
+        result=stop_until_confirmed(attempts=25) if signal['action']=='stop' else responsive_wake(sys.modules[__name__], 300 if signal['action']=='probe' else 900, signal['nonce'])
         print(json.dumps(result,sort_keys=True))
         return 0
     except (GuardError,OSError,ValueError) as exc:

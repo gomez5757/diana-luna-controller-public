@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: diana-lifecycle-preflight
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   verify:
     if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
@@ -23,6 +23,7 @@ jobs:
       - name: Bounded lifecycle request only
         env:
           DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 controller.py
       - name: Confirm shutdown even after a preceding failure
         if: always()
