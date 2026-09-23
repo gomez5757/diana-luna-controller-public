@@ -1,0 +1,113 @@
+name: Diana private failure export over fixed Codespaces SSH
+on:
+  push:
+    branches: [main]
+    paths: [control/ssh-failure-export.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-private-failure-export
+  cancel-in-progress: false
+jobs:
+  export:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Validate fixed diagnostic request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          p=Path('control/ssh-failure-export.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size > 1024:
+              raise SystemExit('invalid request')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          if type(d) is not dict or set(d) != {'schema','action','nonce'}:
+              raise SystemExit('invalid fields')
+          if d['schema'] != 1 or d['action'] != 'export-private-parallel-failure':
+              raise SystemExit('invalid action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          PY
+      - name: Build fixed private diagnostic helper
+        shell: bash
+        run: |
+          cat > /tmp/diana-private-failure-export.py <<'PY'
+          import json, re, subprocess, time
+          from pathlib import Path
+
+          ROOT=Path('/workspaces/diana-plus')
+          STATE=Path('/workspaces/.diana-luna-state')
+          FAILURE=STATE/'parallel-v2-poststart-failure.json'
+          LOG=STATE/'parallel-v2-upgrade.log'
+          CONTROL='chatgpt-auto/luna-operational-close-20260921'
+          BRANCH='chatgpt-auto/luna-parallel-failure-diagnostic-20260923'
+          OUT=ROOT/'infra/luna-codespace/runtime/diagnostics'
+          SENSITIVE=re.compile(r'(?i)(authorization|bearer|cookie|password|secret|token|auth\.json|sk-[a-z0-9_-]+)')
+
+          def git(*args, check=True):
+              p=subprocess.run(['git','-C',str(ROOT),*args],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False)
+              if check and p.returncode:
+                  raise RuntimeError('GIT_FAILED:'+args[0]+':'+str(p.returncode))
+              return p.stdout.strip()
+
+          if FAILURE.is_symlink() or not FAILURE.is_file() or FAILURE.stat().st_size > 8192:
+              raise SystemExit('failure record unavailable')
+          raw=json.loads(FAILURE.read_text(encoding='utf-8'))
+          reason=str(raw.get('reason',''))[:2000]
+          if SENSITIVE.search(reason):
+              reason='REDACTED_SENSITIVE_FAILURE_REASON'
+          failure={
+              'schema':1,
+              'status':str(raw.get('status','BLOCKED')),
+              'reason':reason,
+              'observed_at_epoch':raw.get('observed_at_epoch'),
+              'exported_at_epoch':int(time.time()),
+              'codespace_head':git('rev-parse','HEAD'),
+              'codespace_branch':git('branch','--show-current'),
+          }
+          safe=[]
+          if LOG.is_file() and not LOG.is_symlink():
+              for line in LOG.read_text(encoding='utf-8',errors='replace')[-30000:].splitlines()[-500:]:
+                  if SENSITIVE.search(line):
+                      safe.append('[REDACTED_SENSITIVE_LINE]')
+                  else:
+                      safe.append(line.replace('/workspaces/diana-plus','<private-repo>').replace('/workspaces/.diana-luna-state','<private-state>')[:1600])
+          OUT.mkdir(parents=True,exist_ok=True)
+          f=OUT/'parallel-v2-poststart-failure.json'
+          l=OUT/'parallel-v2-upgrade-tail.log'
+          f.write_text(json.dumps(failure,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+          l.write_text('\n'.join(safe)+'\n',encoding='utf-8')
+          original=git('branch','--show-current')
+          if original != CONTROL:
+              raise SystemExit('unexpected codespace branch')
+          try:
+              git('switch','-c',BRANCH)
+              git('config','user.name','Diana Luna Diagnostics')
+              git('config','user.email','diana-luna-diagnostics@users.noreply.github.com')
+              relf=f.relative_to(ROOT).as_posix(); rell=l.relative_to(ROOT).as_posix()
+              git('add','--',relf,rell)
+              git('commit','-m','diag(luna): persist private parallel-v2 failure [skip ci]','--',relf,rell)
+              sha=git('rev-parse','HEAD')
+              pushed=git('push','origin',f'HEAD:refs/heads/{BRANCH}',check=False)
+              remote=git('ls-remote','--heads','origin',f'refs/heads/{BRANCH}')
+              if not remote.startswith(sha+'\t'):
+                  raise RuntimeError('DIAGNOSTIC_PUSH_UNCERTAIN')
+              print('PRIVATE_DIAGNOSTIC_SHA='+sha)
+          finally:
+              git('switch',CONTROL,check=False)
+          PY
+      - name: Copy fixed helper and execute inside exact Codespace
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh codespace cp -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx /tmp/diana-private-failure-export.py remote:/tmp/diana-private-failure-export.py
+          gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'python3 /tmp/diana-private-failure-export.py'
