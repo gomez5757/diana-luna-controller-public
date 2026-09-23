@@ -60,15 +60,15 @@ jobs:
           rc=$?
           set -e
           echo "returncode=$rc" >> "$GITHUB_OUTPUT"
-          python3 - <<'PY'
-          import hashlib,json
+          TEST_RC="$rc" SOURCE_SHA='${{ steps.request.outputs.source_sha }}' python3 - <<'PY'
+          import hashlib,json,os
           from pathlib import Path
           p=Path('/tmp/runtime-tests.log')
           data=p.read_bytes()
           result={
             'schema':1,
-            'source_sha':'${{ steps.request.outputs.source_sha }}',
-            'returncode':int('${{ steps.tests.outputs.returncode }}' or '0'),
+            'source_sha':os.environ['SOURCE_SHA'],
+            'returncode':int(os.environ['TEST_RC']),
             'sha256':hashlib.sha256(data).hexdigest(),
             'bytes':len(data),
           }
@@ -77,7 +77,6 @@ jobs:
       - name: Persist full diagnostics only in private repository
         env:
           GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
-          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
           DESTINATION_BRANCH: ${{ steps.request.outputs.destination_branch }}
         shell: bash
         run: |
