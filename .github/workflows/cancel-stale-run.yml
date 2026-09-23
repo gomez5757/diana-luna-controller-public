@@ -1,0 +1,47 @@
+name: Cancel one stale lifecycle run
+on:
+  push:
+    branches: [main]
+    paths: [control/cancel-run.json]
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: diana-cancel-stale-run
+  cancel-in-progress: false
+jobs:
+  cancel:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: request
+        name: Validate same-repository cancel request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re
+          from pathlib import Path
+          p=Path('control/cancel-run.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size > 1024:
+              raise SystemExit('invalid cancel request')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          if type(d) is not dict or set(d) != {'schema','action','nonce','run_id'}:
+              raise SystemExit('invalid cancel fields')
+          if d['schema'] != 1 or d['action'] != 'cancel-stale-lifecycle':
+              raise SystemExit('invalid cancel action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid cancel nonce')
+          if type(d['run_id']) is not int or d['run_id'] <= 0:
+              raise SystemExit('invalid run id')
+          print('run_id='+str(d['run_id']))
+          PY
+      - name: Cancel exact run in this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.request.outputs.run_id }}
+        run: gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/cancel"
