@@ -1,0 +1,105 @@
+name: Diana private runtime diagnostics
+on:
+  push:
+    branches: [main]
+    paths: [control/runtime-diagnostic.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-private-runtime-diagnostics
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: request
+        name: Validate exact private diagnostic request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re
+          from pathlib import Path
+          p=Path('control/runtime-diagnostic.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size > 2048:
+              raise SystemExit('invalid diagnostic request')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          if type(d) is not dict or set(d) != {'schema','action','nonce','source_sha','destination_branch'}:
+              raise SystemExit('invalid diagnostic fields')
+          if d['schema'] != 1 or d['action'] != 'runtime-tests':
+              raise SystemExit('invalid diagnostic action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          if re.fullmatch(r'[a-f0-9]{40}',str(d['source_sha'])) is None:
+              raise SystemExit('invalid source sha')
+          if d['destination_branch'] != 'chatgpt-auto/luna-parallel-diagnostics-20260923':
+              raise SystemExit('invalid destination branch')
+          print('source_sha='+d['source_sha'])
+          print('destination_branch='+d['destination_branch'])
+          PY
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: gomez5757/diana-plus
+          ref: ${{ steps.request.outputs.source_sha }}
+          token: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+          path: private
+          persist-credentials: false
+          fetch-depth: 1
+      - id: tests
+        name: Run private runtime tests without exposing output
+        shell: bash
+        run: |
+          set +e
+          cd private/infra/luna-codespace/runtime
+          PYTHONPATH=. python3 -m unittest discover -s . -p 'test_*.py' > /tmp/runtime-tests.log 2>&1
+          rc=$?
+          set -e
+          echo "returncode=$rc" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          p=Path('/tmp/runtime-tests.log')
+          data=p.read_bytes()
+          result={
+            'schema':1,
+            'source_sha':'${{ steps.request.outputs.source_sha }}',
+            'returncode':int('${{ steps.tests.outputs.returncode }}' or '0'),
+            'sha256':hashlib.sha256(data).hexdigest(),
+            'bytes':len(data),
+          }
+          Path('/tmp/runtime-tests-result.json').write_text(json.dumps(result,sort_keys=True)+'\n',encoding='utf-8')
+          PY
+      - name: Persist full diagnostics only in private repository
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+          DESTINATION_BRANCH: ${{ steps.request.outputs.destination_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,json,os,subprocess
+          from pathlib import Path
+          branch=os.environ['DESTINATION_BRANCH']
+          for source,dest,message in [
+            ('/tmp/runtime-tests.log','infra/luna-codespace/runtime/diagnostics/parallel-v2-full-tests.log','diag(luna): persist private parallel-v2 test log'),
+            ('/tmp/runtime-tests-result.json','infra/luna-codespace/runtime/diagnostics/parallel-v2-test-result.json','diag(luna): persist private parallel-v2 test result'),
+          ]:
+            payload={
+              'message':message,
+              'content':base64.b64encode(Path(source).read_bytes()).decode(),
+              'branch':branch,
+            }
+            subprocess.run([
+              'gh','api','--method','PUT',
+              '/repos/gomez5757/diana-plus/contents/'+dest,
+              '--input','-'
+            ],input=json.dumps(payload),text=True,check=True,stdout=subprocess.DEVNULL)
+          PY
+      - name: Report only private persistence status
+        run: echo "PRIVATE_DIAGNOSTIC_PERSISTED=yes returncode=${{ steps.tests.outputs.returncode }}"
