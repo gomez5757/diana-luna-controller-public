@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$SOURCE_SHA" = "fa8cf4b034b5ebe2ef9876a6b5ad1aec9f7731c7"
+          test "$SOURCE_SHA" = "d794dc2862e2c7a5d2c53a96f6ddb509e6b6e194"
           gh api "/repos/gomez5757/diana-plus/commits/$SOURCE_SHA" --jq .sha | grep -Fx "$SOURCE_SHA" >/dev/null
           gh api -H 'Accept: application/vnd.github+json' "/repos/gomez5757/diana-plus/tarball/$SOURCE_SHA" > /tmp/private-source.tgz
           mkdir -p /tmp/private-source
