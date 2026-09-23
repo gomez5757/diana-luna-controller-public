@@ -1,0 +1,75 @@
+name: Diana fixed Codespace diagnostic export
+on:
+  push:
+    branches: [main]
+    paths: [control/export.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-codespace-export
+  cancel-in-progress: false
+jobs:
+  export:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Validate one-shot export request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          p=Path('control/export.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size>512:
+              raise SystemExit('invalid export request')
+          d=json.loads(p.read_text())
+          if type(d) is not dict or set(d)!={'schema','action','nonce'}:
+              raise SystemExit('invalid export fields')
+          if d['schema']!=1 or d['action']!='export-diagnostics':
+              raise SystemExit('invalid export action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          PY
+      - name: Export repository-local Codespace changes only
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -X POST /user/codespaces/diana-luna-secure-auth-pjxq7jrj7xpwfrpjx/exports >/tmp/export-start.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/export-start.json'))
+          print('EXPORT_START_STATE='+str(d.get('state')))
+          print('EXPORT_START_ID='+str(d.get('id')))
+          PY
+          for _ in $(seq 1 60); do
+            gh api /user/codespaces/diana-luna-secure-auth-pjxq7jrj7xpwfrpjx/exports/latest >/tmp/export-status.json
+            state=$(python3 -c "import json; print(json.load(open('/tmp/export-status.json')).get('state',''))")
+            if [ "$state" = "succeeded" ]; then
+              python3 - <<'PY'
+          import json,re
+          d=json.load(open('/tmp/export-status.json'))
+          branch=str(d.get('branch',''))
+          sha=str(d.get('sha',''))
+          if not re.fullmatch(r'[A-Za-z0-9._/-]+',branch): raise SystemExit('invalid exported branch')
+          if not re.fullmatch(r'[a-f0-9]{40}',sha): raise SystemExit('invalid exported sha')
+          print('EXPORT_STATE=succeeded')
+          print('EXPORT_BRANCH='+branch)
+          print('EXPORT_SHA='+sha)
+          PY
+              exit 0
+            fi
+            if [ "$state" = "failed" ]; then
+              echo "Export failed" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Export did not finish" >&2
+          exit 1
