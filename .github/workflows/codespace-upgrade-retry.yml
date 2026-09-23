@@ -1,0 +1,70 @@
+name: Diana ordered parallel-v2 retry
+on:
+  push:
+    branches: [main]
+    paths: [control/retry.json]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: diana-parallel-v2-retry
+  cancel-in-progress: false
+jobs:
+  retry:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Validate exact retry request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          p=Path('control/retry.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size>512:
+              raise SystemExit('invalid retry request')
+          d=json.loads(p.read_text())
+          if type(d) is not dict or set(d)!={'schema','action','nonce','after_run_id'}:
+              raise SystemExit('invalid retry fields')
+          if d['schema']!=1 or d['action']!='parallel-v2-retry':
+              raise SystemExit('invalid retry action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          if d['after_run_id']!=35839233278:
+              raise SystemExit('unexpected predecessor')
+          PY
+      - name: Wait for predecessor to finish and stop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 240); do
+            status=$(gh api /repos/gomez5757/diana-luna-controller-public/actions/runs/35839233278 --jq .status)
+            if [ "$status" = "completed" ]; then
+              conclusion=$(gh api /repos/gomez5757/diana-luna-controller-public/actions/runs/35839233278 --jq .conclusion)
+              echo "PREDECESSOR_CONCLUSION=$conclusion"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Predecessor did not complete" >&2
+          exit 1
+      - name: Start exact Codespace and preserve full migration window
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api -X POST /user/codespaces/diana-luna-secure-auth-pjxq7jrj7xpwfrpjx/start >/dev/null
+          sleep 1200
+      - name: Confirm shutdown even after failure
+        if: always()
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: python3 controller.py --stop
