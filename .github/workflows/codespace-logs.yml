@@ -1,0 +1,63 @@
+name: Diana sanitized Codespace creation log
+on:
+  push:
+    branches: [main]
+    paths: [control/logs.json]
+permissions:
+  contents: read
+concurrency:
+  group: diana-codespace-logs
+  cancel-in-progress: false
+jobs:
+  logs:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Validate log request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          p=Path('control/logs.json')
+          if p.is_symlink() or not p.is_file() or p.stat().st_size>512:
+              raise SystemExit('invalid log request')
+          d=json.loads(p.read_text())
+          if type(d) is not dict or set(d)!={'schema','action','nonce'}:
+              raise SystemExit('invalid log fields')
+          if d['schema']!=1 or d['action']!='creation-log-diagnostic':
+              raise SystemExit('invalid log action')
+          if re.fullmatch(r'[a-f0-9]{32}',str(d['nonce'])) is None:
+              raise SystemExit('invalid nonce')
+          PY
+      - name: Fetch and sanitize fixed Codespace creation log
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh codespace logs -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx > /tmp/creation.log 2>/tmp/logs.err || {
+            sed -E 's/(token|secret|password|authorization)[^ ]*/REDACTED/Ig' /tmp/logs.err
+            exit 1
+          }
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          lines=Path('/tmp/creation.log').read_text(errors='replace').splitlines()
+          keep=[]
+          needles=('parallel-v2','parallel_v2','resume_auth_check','POSTSTART','POSTSTART_COMMAND_FAILED','Traceback','REPLACEMENT_COUNT','UPGRADE_','CONTROL_BRANCH','REQUEST_COMMIT','RED_TEST','GREEN_FAILED','PRIVATE_SUPERVISOR')
+          for line in lines:
+              if any(n.lower() in line.lower() for n in needles):
+                  line=re.sub(r'(?i)(token|secret|password|authorization)\s*[:=]\s*\S+',r'\1=REDACTED',line)
+                  line=re.sub(r'gh[pousr]_[A-Za-z0-9_]+','REDACTED',line)
+                  line=re.sub(r'sk-[A-Za-z0-9_-]+','REDACTED',line)
+                  keep.append(line[:1200])
+          print('SANITIZED_MATCH_COUNT='+str(len(keep)))
+          for line in keep[-120:]:
+              print(line)
+          PY
