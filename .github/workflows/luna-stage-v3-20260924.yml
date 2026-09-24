@@ -1,0 +1,36 @@
+name: Luna private V3 source staging
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/luna-stage-v3-20260924.yml]
+permissions:
+  contents: read
+concurrency:
+  group: diana-lifecycle-preflight
+  cancel-in-progress: false
+jobs:
+  stage:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Start fixed Codespace
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: |
+          python3 -c "import controller; controller.api_post('start')"
+      - name: Stage exact private source and run tests inside Codespace
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --kill-after=10s 360s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc '\''set -euo pipefail; cd /workspaces/diana-plus; git -c core.hooksPath=/dev/null fetch -q origin 2a381a6a3c533f52212fb12d010eecddf1c5956f; git show 2a381a6a3c533f52212fb12d010eecddf1c5956f:infra/luna-codespace/parallel_v3/recovery/stage_host.py | python3 - 2a381a6a3c533f52212fb12d010eecddf1c5956f'\'''
+      - name: Confirm provider shutdown
+        if: always()
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: python3 controller.py --stop
