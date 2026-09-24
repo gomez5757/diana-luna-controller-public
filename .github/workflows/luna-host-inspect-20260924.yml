@@ -22,13 +22,13 @@ jobs:
           DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         run: |
           python3 -c "import controller; controller.api_post('start')"
-      - name: Metadata-only diagnostic with secrets redacted
+      - name: Inspect effective named policy without model turns
         env:
           GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          timeout --kill-after=10s 180s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc "python3 -"' < tools/inspect_v3_rpc_20260924.py
+          timeout --kill-after=10s 180s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc "python3 -"' < tools/inspect_v3_effective_policy.py
       - name: Confirm provider shutdown
         if: always()
         env:
