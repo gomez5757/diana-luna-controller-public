@@ -22,13 +22,13 @@ jobs:
           DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         run: |
           python3 -c "import controller; controller.api_post('start')"
-      - name: Verify live sandbox boundaries before authorizing model execution
+      - name: Verify sandbox and App Server metadata without model turns
         env:
           GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          timeout --kill-after=10s 360s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc '\''set -euo pipefail; cd /workspaces/.diana-luna-control-v3; git -c core.hooksPath=/dev/null fetch -q origin 0dc84033a2a6be6f84bf32695316094ed1c87f16; git show 0dc84033a2a6be6f84bf32695316094ed1c87f16:infra/luna-codespace/parallel_v3/recovery/activate_and_probe.py | python3 - 0dc84033a2a6be6f84bf32695316094ed1c87f16'\'''
+          timeout --kill-after=10s 360s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc '\''set -euo pipefail; cd /workspaces/.diana-luna-control-v3; git -c core.hooksPath=/dev/null fetch -q origin fe53525f23f5811dc721b28c86ab0176d58e5028; git show fe53525f23f5811dc721b28c86ab0176d58e5028:infra/luna-codespace/parallel_v3/recovery/fix_helper_visibility.py | python3 - fe53525f23f5811dc721b28c86ab0176d58e5028'\'''
       - name: Confirm provider shutdown
         if: always()
         env:
