@@ -22,13 +22,13 @@ jobs:
           DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         run: |
           python3 -c "import controller; controller.api_post('start')"
-      - name: Read-only integrity and capabilities; no credentials opened
+      - name: Read synthetic test failure and managed sandbox shape
         env:
           GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          timeout --kill-after=10s 180s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc "python3 -"' < tools/inspect_luna_host_20260924.py
+          timeout --kill-after=10s 180s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc "python3 -"' < tools/inspect_v3_staging_20260924.py
       - name: Confirm provider shutdown
         if: always()
         env:
