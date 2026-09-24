@@ -22,13 +22,13 @@ jobs:
           DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         run: |
           python3 -c "import controller; controller.api_post('start')"
-      - name: Stage exact private source and run tests inside Codespace
+      - name: Verify target tests and sandbox without starting a model turn
         env:
           GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          timeout --kill-after=10s 360s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc '\''set -euo pipefail; cd /workspaces/diana-plus; git -c core.hooksPath=/dev/null fetch -q origin 2a381a6a3c533f52212fb12d010eecddf1c5956f; git show 2a381a6a3c533f52212fb12d010eecddf1c5956f:infra/luna-codespace/parallel_v3/recovery/stage_host.py | python3 - 2a381a6a3c533f52212fb12d010eecddf1c5956f'\'''
+          timeout --kill-after=10s 360s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'bash -lc '\''set -euo pipefail; cd /workspaces/.diana-luna-control-v3; git -c core.hooksPath=/dev/null fetch -q origin 894653247fc6f0432d13056ffa16c3f52dcda87b; git show 894653247fc6f0432d13056ffa16c3f52dcda87b:infra/luna-codespace/parallel_v3/recovery/complete_staging.py | python3 - 894653247fc6f0432d13056ffa16c3f52dcda87b'\'''
       - name: Confirm provider shutdown
         if: always()
         env:
