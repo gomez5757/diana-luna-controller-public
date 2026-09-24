@@ -1,0 +1,36 @@
+name: Luna private host integrity inspection
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/luna-host-inspect-20260924.yml]
+permissions:
+  contents: read
+concurrency:
+  group: diana-lifecycle-preflight
+  cancel-in-progress: false
+jobs:
+  inspect:
+    if: github.repository == 'gomez5757/diana-luna-controller-public' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Start fixed Codespace
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: |
+          python3 -c "import controller; controller.api_post('start')"
+      - name: Read-only integrity and capabilities; no credentials opened
+        env:
+          GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --kill-after=10s 180s gh codespace ssh -c diana-luna-secure-auth-pjxq7jrj7xpwfrpjx -- 'python3 -' < tools/inspect_luna_host_20260924.py
+      - name: Confirm provider shutdown
+        if: always()
+        env:
+          DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
+        run: python3 controller.py --stop
