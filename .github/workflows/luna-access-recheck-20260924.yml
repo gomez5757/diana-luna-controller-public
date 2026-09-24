@@ -48,7 +48,8 @@ jobs:
       - name: Start the one existing Codespace
         env:
           DIANA_CODESPACE_LIFECYCLE_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
-        run: python3 -c "import controller; print({'start_request': controller.api_post('start')})"
+        run: |
+          python3 -c "import controller; print({'start_request': controller.api_post('start')})"
       - name: Verify authorized SSH with a fixed no-op command
         env:
           GH_TOKEN: ${{ secrets.DIANA_CODESPACE_LIFECYCLE_TOKEN }}
